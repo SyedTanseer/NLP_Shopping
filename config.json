@@ -1,0 +1,49 @@
+{
+  "asr": {
+    "whisper_model_size": "small",
+    "whisper_model_path": null,
+    "confidence_threshold": 0.7,
+    "max_audio_length": 30,
+    "sample_rate": 16000,
+    "fallback_enabled": true,
+    "google_api_key": null
+  },
+  "nlp": {
+    "intent_model_path": "distilbert-base-uncased",
+    "entity_model_path": "en_core_web_sm",
+    "intent_confidence_threshold": 0.8,
+    "entity_confidence_threshold": 0.7,
+    "max_text_length": 512,
+    "enable_context_resolution": true
+  },
+  "cart": {
+    "max_cart_items": 50,
+    "session_timeout": 1800,
+    "enable_inventory_check": true,
+    "max_quantity_per_item": 10,
+    "price_precision": 2
+  },
+  "api": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "debug": false,
+    "cors_origins": ["*"],
+    "max_request_size": 10485760,
+    "request_timeout": 30
+  },
+  "performance": {
+    "enable_caching": true,
+    "cache_ttl": 300,
+    "max_concurrent_requests": 100,
+    "model_batch_size": 1,
+    "gpu_enabled": false,
+    "cpu_threads": 4
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "file_path": null,
+    "max_file_size": 10485760,
+    "backup_count": 5
+  }
+}
