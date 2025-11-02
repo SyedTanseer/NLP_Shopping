@@ -107,6 +107,9 @@ class VoiceShoppingGUI:
         
         if 'voice_commands_processed' not in st.session_state:
             st.session_state.voice_commands_processed = 0
+        
+        if 'last_text_input' not in st.session_state:
+            st.session_state.last_text_input = ""
     
     @st.cache_resource
     def get_product_search(_self):
@@ -454,7 +457,11 @@ class VoiceShoppingGUI:
         with col1:
             if st.button("Send", type="primary"):
                 if user_input:
-                    self.process_chat_message(user_input)
+                    # Check if this might be a voice command (contains common voice patterns)
+                    is_voice = any(phrase in user_input.lower() for phrase in [
+                        'add', 'remove', 'show me', 'search for', 'find', 'help'
+                    ])
+                    self.process_chat_message(user_input, is_voice_command=is_voice)
                     st.rerun()
         
         with col2:
@@ -463,7 +470,9 @@ class VoiceShoppingGUI:
                 st.rerun()
         
         # Hidden input for voice command processing
-        voice_command = st.text_input("", key="voice_command_trigger", label_visibility="hidden")
+        voice_command = st.text_input("Voice Command Trigger", key="voice_command_trigger", 
+                                     label_visibility="collapsed", 
+                                     help="This field is used for voice command processing")
         
         # Process voice command if detected
         if voice_command and voice_command != st.session_state.get('last_voice_command', ''):
@@ -473,6 +482,20 @@ class VoiceShoppingGUI:
             if actual_command.strip():
                 self.process_chat_message(actual_command, is_voice_command=True)
                 st.rerun()
+        
+        # Alternative: Check if text input changed significantly (possible voice input)
+        if user_input and user_input != st.session_state.last_text_input:
+            # Check if this looks like a voice command that appeared suddenly
+            if (len(user_input) > 10 and  # Reasonable length
+                any(word in user_input.lower() for word in ['add', 'show', 'search', 'find', 'remove', 'help']) and
+                st.session_state.last_text_input == ""):  # Was empty before
+                
+                # Auto-process if it looks like voice input
+                st.session_state.last_text_input = user_input
+                self.process_chat_message(user_input, is_voice_command=True)
+                st.rerun()
+            else:
+                st.session_state.last_text_input = user_input
         
         with col3:
             if st.session_state.voice_commands_processed > 0:
@@ -1196,8 +1219,38 @@ Just tell me what you want and I'll help you find it! 🛍️"""
                         
                         // Auto-submit by updating the hidden voice command trigger
                         setTimeout(function() {
-                            // Find the hidden voice command trigger input
-                            const voiceTrigger = document.querySelector('input[aria-label=""]');
+                            // Try multiple methods to find the voice trigger input
+                            let voiceTrigger = null;
+                            
+                            // Method 1: Look for input with specific help text
+                            const inputs = document.querySelectorAll('input[type="text"]');
+                            for (let input of inputs) {
+                                if (input.title && input.title.includes('voice command processing')) {
+                                    voiceTrigger = input;
+                                    break;
+                                }
+                            }
+                            
+                            // Method 2: Look for collapsed label input
+                            if (!voiceTrigger) {
+                                const labels = document.querySelectorAll('label');
+                                for (let label of labels) {
+                                    if (label.textContent.includes('Voice Command Trigger')) {
+                                        const inputId = label.getAttribute('for');
+                                        if (inputId) {
+                                            voiceTrigger = document.getElementById(inputId);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Method 3: Fallback - find by data attribute or class
+                            if (!voiceTrigger) {
+                                voiceTrigger = document.querySelector('[data-testid*="voice"]') || 
+                                             document.querySelector('input[aria-label*="Voice"]');
+                            }
+                            
                             if (voiceTrigger) {
                                 voiceTrigger.value = transcript + '_' + Date.now(); // Add timestamp to ensure uniqueness
                                 voiceTrigger.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1205,6 +1258,19 @@ Just tell me what you want and I'll help you find it! 🛍️"""
                                 
                                 document.getElementById('voiceStatus').textContent = '🚀 Processing voice command...';
                                 document.getElementById('voiceStatus').style.color = '#1f77b4';
+                                
+                                console.log('Voice command triggered:', transcript);
+                            } else {
+                                // Fallback method: Try alternative approach
+                                console.log('Trying fallback method for voice command:', transcript);
+                                if (triggerVoiceCommand(transcript)) {
+                                    document.getElementById('voiceStatus').textContent = '🚀 Processing voice command (fallback)...';
+                                    document.getElementById('voiceStatus').style.color = '#1f77b4';
+                                } else {
+                                    console.error('All voice trigger methods failed');
+                                    document.getElementById('voiceStatus').textContent = '❌ Auto-processing failed - please click Send';
+                                    document.getElementById('voiceStatus').style.color = '#dc3545';
+                                }
                             }
                         }, 500); // 500ms delay to ensure input is processed
                     }
@@ -1257,6 +1323,30 @@ Just tell me what you want and I'll help you find it! 🛍️"""
         function resetVoiceButtons() {
             document.getElementById('startVoice').disabled = false;
             document.getElementById('stopVoice').disabled = true;
+        }
+        
+        // Alternative method: Use Streamlit's component communication
+        function triggerVoiceCommand(transcript) {
+            // Try to trigger Streamlit rerun by modifying a visible element
+            const chatInput = document.querySelector('input[placeholder*="shopping request"]');
+            if (chatInput) {
+                chatInput.value = transcript;
+                chatInput.dispatchEvent(new Event('input', { bubbles: true }));
+                chatInput.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                // Simulate Enter key press to trigger form submission
+                const enterEvent = new KeyboardEvent('keydown', {
+                    key: 'Enter',
+                    code: 'Enter',
+                    keyCode: 13,
+                    which: 13,
+                    bubbles: true
+                });
+                chatInput.dispatchEvent(enterEvent);
+                
+                return true;
+            }
+            return false;
         }
         </script>
         """
