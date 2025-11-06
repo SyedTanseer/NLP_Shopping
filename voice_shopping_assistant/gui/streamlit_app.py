@@ -110,6 +110,9 @@ class VoiceShoppingGUI:
         
         if 'last_text_input' not in st.session_state:
             st.session_state.last_text_input = ""
+        
+        if 'voice_commands_processed' not in st.session_state:
+            st.session_state.voice_commands_processed = 0
     
     @st.cache_resource
     def get_product_search(_self):
@@ -434,25 +437,22 @@ class VoiceShoppingGUI:
         """Display the chat interface page"""
         st.markdown("## 💬 Voice Shopping Chat")
         
-        # Add speech-to-text functionality
-        self._add_speech_to_text_component()
+        # Chat input with integrated voice support
+        st.markdown("### 💬 Chat with Voice Assistant")
         
-        # Chat input with voice support
-        col1, col2 = st.columns([4, 1])
+        # Add the integrated voice input component
+        self._add_integrated_voice_input()
         
-        with col1:
-            user_input = st.text_input(
-                "Type or speak your shopping request:",
-                placeholder="e.g., 'Add two red shirts to my cart' or 'Show me blue jeans under $100'",
-                key="chat_input"
-            )
-        
-        with col2:
-            st.markdown("🎤 **Voice Input**")
-            # Voice input will be handled by JavaScript
+        # Get user input from the integrated component
+        user_input = st.text_input(
+            "Type your shopping request or click the microphone to speak:",
+            placeholder="e.g., 'Add two red shirts to my cart' or 'Show me blue jeans under $100'",
+            key="chat_input",
+            help="💡 Tip: Click the 🎤 icon to speak your request, then press Enter to send"
+        )
         
         # Control buttons
-        col1, col2, col3 = st.columns([1, 1, 3])
+        col1, col2, col3 = st.columns([1, 1, 2])
         
         with col1:
             if st.button("Send", type="primary"):
@@ -462,6 +462,8 @@ class VoiceShoppingGUI:
                         'add', 'remove', 'show me', 'search for', 'find', 'help'
                     ])
                     self.process_chat_message(user_input, is_voice_command=is_voice)
+                    # Clear the input after processing
+                    st.session_state.chat_input = ""
                     st.rerun()
         
         with col2:
@@ -469,39 +471,11 @@ class VoiceShoppingGUI:
                 st.session_state.conversation_history = []
                 st.rerun()
         
-        # Hidden input for voice command processing
-        voice_command = st.text_input("Voice Command Trigger", key="voice_command_trigger", 
-                                     label_visibility="collapsed", 
-                                     help="This field is used for voice command processing")
-        
-        # Process voice command if detected
-        if voice_command and voice_command != st.session_state.get('last_voice_command', ''):
-            st.session_state.last_voice_command = voice_command
-            # Extract the actual command (remove timestamp)
-            actual_command = voice_command.split('_')[0] if '_' in voice_command else voice_command
-            if actual_command.strip():
-                self.process_chat_message(actual_command, is_voice_command=True)
-                st.rerun()
-        
-        # Alternative: Check if text input changed significantly (possible voice input)
-        if user_input and user_input != st.session_state.last_text_input:
-            # Check if this looks like a voice command that appeared suddenly
-            if (len(user_input) > 10 and  # Reasonable length
-                any(word in user_input.lower() for word in ['add', 'show', 'search', 'find', 'remove', 'help']) and
-                st.session_state.last_text_input == ""):  # Was empty before
-                
-                # Auto-process if it looks like voice input
-                st.session_state.last_text_input = user_input
-                self.process_chat_message(user_input, is_voice_command=True)
-                st.rerun()
-            else:
-                st.session_state.last_text_input = user_input
-        
         with col3:
             if st.session_state.voice_commands_processed > 0:
                 st.success(f"🎤 {st.session_state.voice_commands_processed} voice commands processed!")
             else:
-                st.markdown("*Click 🎤 Start Voice to speak your request*")
+                st.info("💡 Use the microphone icon to speak your request")
         
         # Chat history
         st.markdown("### 📝 Conversation History")
@@ -536,6 +510,9 @@ class VoiceShoppingGUI:
     
     def process_chat_message(self, user_input: str, is_voice_command: bool = False):
         """Process a chat message and generate response"""
+        if not user_input or not user_input.strip():
+            return
+        
         # Process the command and update cart if needed
         response = self.process_shopping_command(user_input)
         
@@ -1137,28 +1114,24 @@ Just tell me what you want and I'll help you find it! 🛍️"""
                 else:
                     st.info("No conversation history")
     
-    def _add_speech_to_text_component(self):
-        """Add speech-to-text functionality using Web Speech API"""
+    def _add_integrated_voice_input(self):
+        """Add integrated voice input with microphone icon in the chat field"""
         
-        # Add the speech-to-text HTML/JavaScript component
-        speech_component = """
-        <div style="background-color: #f0f2f6; padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
-            <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
-                <button id="startVoice" onclick="startVoiceRecognition()" 
-                        style="background-color: #1f77b4; color: white; border: none; padding: 0.5rem 1rem; 
-                               border-radius: 4px; cursor: pointer; font-size: 14px;">
-                    🎤 Start Voice
+        # Add the integrated voice input component
+        voice_component = """
+        <div style="margin-bottom: 1rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                <button id="voiceMicButton" onclick="toggleVoiceRecognition()" 
+                        style="background-color: #1f77b4; color: white; border: none; padding: 0.4rem 0.8rem; 
+                               border-radius: 20px; cursor: pointer; font-size: 16px; display: flex; align-items: center; gap: 0.3rem;">
+                    <span id="micIcon">🎤</span>
+                    <span id="micText">Speak</span>
                 </button>
-                <button id="stopVoice" onclick="stopVoiceRecognition()" 
-                        style="background-color: #dc3545; color: white; border: none; padding: 0.5rem 1rem; 
-                               border-radius: 4px; cursor: pointer; font-size: 14px;" disabled>
-                    ⏹️ Stop Voice
-                </button>
-                <span id="voiceStatus" style="font-weight: bold; color: #666;">Ready to listen</span>
+                <span id="voiceStatus" style="font-size: 14px; color: #666;">Click microphone to speak</span>
             </div>
-            <div id="voiceResult" style="margin-top: 0.5rem; padding: 0.5rem; background-color: white; 
-                                        border-radius: 4px; min-height: 2rem; border: 1px solid #ddd;">
-                <em>Voice input will appear here...</em>
+            <div id="voiceTranscript" style="display: none; padding: 0.5rem; background-color: #f0f8ff; 
+                                           border-radius: 4px; border-left: 4px solid #1f77b4; margin-bottom: 0.5rem;">
+                <strong>Voice Input:</strong> <span id="transcriptText"></span>
             </div>
         </div>
 
@@ -1179,100 +1152,44 @@ Just tell me what you want and I'll help you find it! 🛍️"""
             // Event handlers
             recognition.onstart = function() {
                 isListening = true;
-                document.getElementById('voiceStatus').textContent = '🎤 Listening...';
+                document.getElementById('micIcon').textContent = '🔴';
+                document.getElementById('micText').textContent = 'Listening...';
+                document.getElementById('voiceMicButton').style.backgroundColor = '#dc3545';
+                document.getElementById('voiceStatus').textContent = 'Listening... Speak now!';
                 document.getElementById('voiceStatus').style.color = '#28a745';
-                document.getElementById('startVoice').disabled = true;
-                document.getElementById('stopVoice').disabled = false;
-                document.getElementById('voiceResult').innerHTML = '<em>Listening for your voice...</em>';
+                document.getElementById('voiceTranscript').style.display = 'block';
+                document.getElementById('transcriptText').textContent = 'Listening...';
             };
             
             recognition.onresult = function(event) {
                 let transcript = '';
+                let isFinal = false;
+                
                 for (let i = event.resultIndex; i < event.results.length; i++) {
                     transcript += event.results[i][0].transcript;
+                    if (event.results[i].isFinal) {
+                        isFinal = true;
+                    }
                 }
                 
-                // Update the voice result display
-                document.getElementById('voiceResult').textContent = transcript;
+                // Update the transcript display
+                document.getElementById('transcriptText').textContent = transcript;
                 
-                // If final result, update the text input and auto-submit
-                if (event.results[event.results.length - 1].isFinal) {
-                    // Find the Streamlit text input and update it
-                    const textInputs = document.querySelectorAll('input[type="text"]');
-                    let chatInput = null;
-                    
-                    // Find the chat input specifically
-                    for (let input of textInputs) {
-                        if (input.placeholder && input.placeholder.includes('shopping request')) {
-                            chatInput = input;
-                            break;
-                        }
-                    }
-                    
-                    if (chatInput && transcript.trim()) {
-                        chatInput.value = transcript;
+                // If final result, update the Streamlit text input
+                if (isFinal && transcript.trim()) {
+                    // Find the Streamlit chat input field
+                    const chatInput = document.querySelector('input[placeholder*="shopping request"]');
+                    if (chatInput) {
+                        chatInput.value = transcript.trim();
                         chatInput.dispatchEvent(new Event('input', { bubbles: true }));
                         chatInput.dispatchEvent(new Event('change', { bubbles: true }));
                         
-                        // Focus on the input
+                        // Focus on the input so user can see the text and press Enter
                         chatInput.focus();
                         
-                        // Auto-submit by updating the hidden voice command trigger
-                        setTimeout(function() {
-                            // Try multiple methods to find the voice trigger input
-                            let voiceTrigger = null;
-                            
-                            // Method 1: Look for input with specific help text
-                            const inputs = document.querySelectorAll('input[type="text"]');
-                            for (let input of inputs) {
-                                if (input.title && input.title.includes('voice command processing')) {
-                                    voiceTrigger = input;
-                                    break;
-                                }
-                            }
-                            
-                            // Method 2: Look for collapsed label input
-                            if (!voiceTrigger) {
-                                const labels = document.querySelectorAll('label');
-                                for (let label of labels) {
-                                    if (label.textContent.includes('Voice Command Trigger')) {
-                                        const inputId = label.getAttribute('for');
-                                        if (inputId) {
-                                            voiceTrigger = document.getElementById(inputId);
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            // Method 3: Fallback - find by data attribute or class
-                            if (!voiceTrigger) {
-                                voiceTrigger = document.querySelector('[data-testid*="voice"]') || 
-                                             document.querySelector('input[aria-label*="Voice"]');
-                            }
-                            
-                            if (voiceTrigger) {
-                                voiceTrigger.value = transcript + '_' + Date.now(); // Add timestamp to ensure uniqueness
-                                voiceTrigger.dispatchEvent(new Event('input', { bubbles: true }));
-                                voiceTrigger.dispatchEvent(new Event('change', { bubbles: true }));
-                                
-                                document.getElementById('voiceStatus').textContent = '🚀 Processing voice command...';
-                                document.getElementById('voiceStatus').style.color = '#1f77b4';
-                                
-                                console.log('Voice command triggered:', transcript);
-                            } else {
-                                // Fallback method: Try alternative approach
-                                console.log('Trying fallback method for voice command:', transcript);
-                                if (triggerVoiceCommand(transcript)) {
-                                    document.getElementById('voiceStatus').textContent = '🚀 Processing voice command (fallback)...';
-                                    document.getElementById('voiceStatus').style.color = '#1f77b4';
-                                } else {
-                                    console.error('All voice trigger methods failed');
-                                    document.getElementById('voiceStatus').textContent = '❌ Auto-processing failed - please click Send';
-                                    document.getElementById('voiceStatus').style.color = '#dc3545';
-                                }
-                            }
-                        }, 500); // 500ms delay to ensure input is processed
+                        // Update status
+                        document.getElementById('voiceStatus').textContent = '✅ Voice transcribed! Press Enter to send.';
+                        document.getElementById('voiceStatus').style.color = '#1f77b4';
                     }
                 }
             };
@@ -1284,90 +1201,69 @@ Just tell me what you want and I'll help you find it! 🛍️"""
                     errorMsg = 'Microphone access denied. Please allow microphone access.';
                 } else if (event.error === 'no-speech') {
                     errorMsg = 'No speech detected. Please try again.';
+                } else if (event.error === 'network') {
+                    errorMsg = 'Network error. Please check your connection.';
                 }
+                
                 document.getElementById('voiceStatus').textContent = '❌ ' + errorMsg;
                 document.getElementById('voiceStatus').style.color = '#dc3545';
-                resetVoiceButtons();
+                resetMicButton();
             };
             
             recognition.onend = function() {
                 isListening = false;
-                if (document.getElementById('voiceStatus').textContent.includes('Listening')) {
-                    document.getElementById('voiceStatus').textContent = '✅ Voice input complete';
-                    document.getElementById('voiceStatus').style.color = '#28a745';
+                resetMicButton();
+                
+                // If we have transcript text, keep the success message
+                const transcriptText = document.getElementById('transcriptText').textContent;
+                if (transcriptText && transcriptText !== 'Listening...' && !document.getElementById('voiceStatus').textContent.includes('Error')) {
+                    // Keep the success message
+                } else if (!document.getElementById('voiceStatus').textContent.includes('Error')) {
+                    document.getElementById('voiceStatus').textContent = 'Click microphone to speak';
+                    document.getElementById('voiceStatus').style.color = '#666';
                 }
-                resetVoiceButtons();
             };
             
         } else {
             // Browser doesn't support speech recognition
-            document.getElementById('startVoice').disabled = true;
-            document.getElementById('stopVoice').disabled = true;
-            document.getElementById('voiceStatus').textContent = '❌ Speech recognition not supported';
+            document.getElementById('voiceMicButton').disabled = true;
+            document.getElementById('voiceMicButton').style.backgroundColor = '#ccc';
+            document.getElementById('voiceStatus').textContent = '❌ Speech recognition not supported in this browser';
             document.getElementById('voiceStatus').style.color = '#dc3545';
-            document.getElementById('voiceResult').innerHTML = '<em>Your browser does not support speech recognition. Please use Chrome, Edge, or Safari.</em>';
         }
 
-        function startVoiceRecognition() {
-            if (recognition && !isListening) {
+        function toggleVoiceRecognition() {
+            if (!recognition) return;
+            
+            if (isListening) {
+                recognition.stop();
+            } else {
+                // Clear previous transcript
+                document.getElementById('transcriptText').textContent = '';
                 recognition.start();
             }
         }
 
-        function stopVoiceRecognition() {
-            if (recognition && isListening) {
-                recognition.stop();
-            }
-        }
-
-        function resetVoiceButtons() {
-            document.getElementById('startVoice').disabled = false;
-            document.getElementById('stopVoice').disabled = true;
-        }
-        
-        // Alternative method: Use Streamlit's component communication
-        function triggerVoiceCommand(transcript) {
-            // Try to trigger Streamlit rerun by modifying a visible element
-            const chatInput = document.querySelector('input[placeholder*="shopping request"]');
-            if (chatInput) {
-                chatInput.value = transcript;
-                chatInput.dispatchEvent(new Event('input', { bubbles: true }));
-                chatInput.dispatchEvent(new Event('change', { bubbles: true }));
-                
-                // Simulate Enter key press to trigger form submission
-                const enterEvent = new KeyboardEvent('keydown', {
-                    key: 'Enter',
-                    code: 'Enter',
-                    keyCode: 13,
-                    which: 13,
-                    bubbles: true
-                });
-                chatInput.dispatchEvent(enterEvent);
-                
-                return true;
-            }
-            return false;
+        function resetMicButton() {
+            document.getElementById('micIcon').textContent = '🎤';
+            document.getElementById('micText').textContent = 'Speak';
+            document.getElementById('voiceMicButton').style.backgroundColor = '#1f77b4';
         }
         </script>
         """
         
         # Display the component
-        st.components.v1.html(speech_component, height=120)
+        st.components.v1.html(voice_component, height=100)
         
-        # Add instructions
+        # Add simple instructions
         st.markdown("""
-        **🎤 Voice Instructions:**
-        - Click "🎤 Start Voice" to begin speaking
-        - Speak clearly: *"Add two red shirts to my cart"*
-        - Your speech will appear in the text box below
-        - **Command will be processed automatically!** ✨
-        - Works best in Chrome, Edge, and Safari browsers
+        **💡 How to use voice input:**
+        1. Click the **🎤 Speak** button above
+        2. Speak your shopping request clearly
+        3. Your speech will appear in the text field below
+        4. Press **Enter** to send your request
         
-        **Example Voice Commands:**
-        - *"Add a blue shirt to my cart"*
-        - *"Show me red jeans under 100 dollars"*
-        - *"Remove the last item from cart"*
-        - *"What's in my cart?"*
+        **Example commands:** *"Add a red shirt to my cart"* • *"Show me blue jeans"* • *"What's in my cart?"*
         """)
 
 
