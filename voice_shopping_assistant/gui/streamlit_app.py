@@ -462,8 +462,6 @@ class VoiceShoppingGUI:
                         'add', 'remove', 'show me', 'search for', 'find', 'help'
                     ])
                     self.process_chat_message(user_input, is_voice_command=is_voice)
-                    # Clear the input after processing
-                    st.session_state.chat_input = ""
                     st.rerun()
         
         with col2:
@@ -880,9 +878,9 @@ class VoiceShoppingGUI:
                 stock_status = "✅ In Stock" if product.in_stock else "❌ Out of Stock"
                 results.append(f"• {product.name} ({product.brand}) - ${product.price:.2f} {stock_status}")
             
-            results_text = "\n".join(results)
+            results_text = "\n\n".join(results)  # Double line break for better spacing
             price_text = f" under ${price_limit}" if price_limit else ""
-            return f"🔍 **Found {len(products)} products for '{search_terms}'{price_text}:**\n{results_text}\n\nYou can ask me to add any of these to your cart!"
+            return f"🔍 **Found {len(products)} products for '{search_terms}'{price_text}:**\n\n{results_text}\n\nYou can ask me to add any of these to your cart!"
         else:
             price_text = f" under ${price_limit}" if price_limit else ""
             return f"❌ Sorry, I couldn't find any products matching '{search_terms}'{price_text}'. Try searching for shirts, electronics, or other categories!"
