@@ -111,6 +111,9 @@ class VoiceShoppingGUI:
         if 'last_text_input' not in st.session_state:
             st.session_state.last_text_input = ""
         
+        if 'voice_transcript' not in st.session_state:
+            st.session_state.voice_transcript = ""
+        
         if 'voice_commands_processed' not in st.session_state:
             st.session_state.voice_commands_processed = 0
     
@@ -437,6 +440,114 @@ class VoiceShoppingGUI:
         """Display the chat interface page"""
         st.markdown("## 💬 Voice Shopping Chat")
         
+        # Add JavaScript listener to receive messages from voice input iframe and update input field
+        st.markdown("""
+        <script>
+        // Function to update the chat input field with transcript
+        function updateChatInputField(transcript) {
+            // Try the exact selector first
+            let inputField = document.querySelector('#text_input_1');
+            
+            // Fallbacks
+            if (!inputField) {
+                inputField = document.querySelector('input[aria-label*="Type your shopping request"]');
+            }
+            if (!inputField) {
+                const allInputs = document.querySelectorAll('input[type="text"]');
+                for (let input of allInputs) {
+                    if (input.placeholder && input.placeholder.includes('Add two red shirts')) {
+                        inputField = input;
+                        break;
+                    }
+                }
+            }
+            
+            if (inputField) {
+                try {
+                    // Use React's value setter
+                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                    nativeInputValueSetter.call(inputField, transcript);
+                    inputField.value = transcript;
+                    
+                    // Trigger events
+                    ['input', 'change'].forEach(type => {
+                        inputField.dispatchEvent(new Event(type, { bubbles: true }));
+                    });
+                    
+                    inputField.focus();
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            }
+            return false;
+        }
+        
+        // Listen for messages from the voice input iframe
+        window.addEventListener('message', function(event) {
+            // Log all messages for debugging (remove in production)
+            if (event.data && event.data.type === 'voice_transcript') {
+                const transcript = event.data.transcript;
+                sessionStorage.setItem('voice_transcript_pending', transcript);
+                
+                // Try to update immediately, with retries
+                function tryUpdate() {
+                    if (updateChatInputField(transcript)) {
+                        sessionStorage.removeItem('voice_transcript_pending');
+                        return true;
+                    }
+                    return false;
+                }
+                
+                if (!tryUpdate()) {
+                    setTimeout(() => { if (!tryUpdate()) setTimeout(tryUpdate, 500); }, 200);
+                }
+            }
+        }, false);
+        
+        // Check sessionStorage periodically
+        setInterval(function() {
+            const transcript = sessionStorage.getItem('voice_transcript_pending');
+            if (transcript && updateChatInputField(transcript)) {
+                sessionStorage.removeItem('voice_transcript_pending');
+            }
+        }, 500);
+        </script>
+        """, unsafe_allow_html=True)
+        
+        # Check for voice commands from the send button (via URL parameters)
+        try:
+            # Try to read from query params (Streamlit 1.28+)
+            if hasattr(st, 'query_params'):
+                voice_cmd = st.query_params.get('voice_cmd', None)
+                if voice_cmd:
+                    import urllib.parse
+                    command = urllib.parse.unquote(voice_cmd)
+                    if command and command not in st.session_state.get('processed_voice_commands', set()):
+                        # Process the voice command immediately
+                        st.success(f"🎤 Processing voice command: \"{command}\"")
+                        self.process_chat_message(command, is_voice_command=True)
+                        
+                        # Track processed commands to avoid duplicates
+                        if 'processed_voice_commands' not in st.session_state:
+                            st.session_state.processed_voice_commands = set()
+                        st.session_state.processed_voice_commands.add(command)
+                        
+                        # Clear the query parameter and rerun to show results
+                        st.query_params.clear()
+                        st.rerun()
+                        
+                # Also check for regular voice transcript
+                transcript_param = st.query_params.get('voice_transcript', None)
+                if transcript_param:
+                    import urllib.parse
+                    transcript = urllib.parse.unquote(transcript_param)
+                    if transcript:
+                        st.session_state.voice_transcript = transcript
+        except Exception as e:
+            # Fallback for older Streamlit versions or other issues
+            pass
+        
         # Chat input with integrated voice support
         st.markdown("### 💬 Chat with Voice Assistant")
         
@@ -444,12 +555,26 @@ class VoiceShoppingGUI:
         self._add_integrated_voice_input()
         
         # Get user input from the integrated component
+        # Use voice_transcript if available, otherwise use empty string
+        default_value = st.session_state.get('voice_transcript', '')
         user_input = st.text_input(
             "Type your shopping request or click the microphone to speak:",
+            value=default_value if default_value else "",
             placeholder="e.g., 'Add two red shirts to my cart' or 'Show me blue jeans under $100'",
             key="chat_input",
             help="💡 Tip: Click the 🎤 icon to speak your request, then press Enter to send"
         )
+        
+        # Clear voice_transcript after it's been used
+        # Only clear if the input matches the transcript (meaning it was successfully set)
+        if st.session_state.get('voice_transcript'):
+            if user_input == st.session_state.get('voice_transcript'):
+                # Transcript was successfully applied, clear it after a moment
+                # This prevents it from being reapplied on next rerun
+                pass  # Keep it for now, will be cleared when user sends or changes input
+            elif user_input and user_input != st.session_state.get('voice_transcript'):
+                # User has modified the input, so clear the transcript flag
+                st.session_state.voice_transcript = ""
         
         # Control buttons
         col1, col2, col3 = st.columns([1, 1, 2])
@@ -460,8 +585,11 @@ class VoiceShoppingGUI:
                     # Check if this might be a voice command (contains common voice patterns)
                     is_voice = any(phrase in user_input.lower() for phrase in [
                         'add', 'remove', 'show me', 'search for', 'find', 'help'
-                    ])
+                    ]) or st.session_state.get('voice_transcript', '') == user_input
                     self.process_chat_message(user_input, is_voice_command=is_voice)
+                    # Clear voice transcript after sending
+                    if 'voice_transcript' in st.session_state:
+                        st.session_state.voice_transcript = ""
                     st.rerun()
         
         with col2:
@@ -489,7 +617,7 @@ class VoiceShoppingGUI:
         
         # Quick actions
         st.markdown("### ⚡ Quick Actions")
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             if st.button("Show my cart"):
@@ -502,6 +630,16 @@ class VoiceShoppingGUI:
                 st.rerun()
         
         with col3:
+            # Only show checkout button if cart has items
+            cart_items_count = len(st.session_state.cart_items)
+            if cart_items_count > 0:
+                if st.button(f"Checkout ({cart_items_count} items)"):
+                    self.process_chat_message("proceed to checkout")
+                    st.rerun()
+            else:
+                st.button("Checkout (empty)", disabled=True)
+        
+        with col4:
             if st.button("Help me shop"):
                 self.process_chat_message("help me with shopping")
                 st.rerun()
@@ -554,8 +692,12 @@ class VoiceShoppingGUI:
             if 'cart' in user_input_lower:
                 return self.handle_clear_cart_command()
         
+        # CHECKOUT commands
+        elif any(word in user_input_lower for word in ['checkout', 'buy', 'purchase', 'order', 'pay']):
+            return self.handle_checkout_command()
+        
         else:
-            return "I understand you want to shop! You can ask me to add items, search for products, or check your cart. What would you like to do?"
+            return "I understand you want to shop! You can ask me to add items, search for products, check your cart, or proceed to checkout. What would you like to do?"
     
     def handle_add_command(self, user_input: str) -> str:
         """Handle add item commands"""
@@ -904,6 +1046,11 @@ class VoiceShoppingGUI:
 • "Find me some running shoes"
 • "Show me electronics"
 
+**Checkout:**
+• "Proceed to checkout"
+• "I want to buy these items"
+• "Place my order"
+
 Just tell me what you want and I'll help you find it! 🛍️"""
     
     def handle_clear_cart_command(self) -> str:
@@ -914,6 +1061,52 @@ Just tell me what you want and I'll help you find it! 🛍️"""
         count = len(st.session_state.cart_items)
         st.session_state.cart_items.clear()
         return f"✅ Cleared your cart! Removed {count} items."
+    
+    def handle_checkout_command(self) -> str:
+        """Handle checkout commands"""
+        if not st.session_state.cart_items:
+            return "🛒 Your cart is empty! Add some items before checking out. Try saying 'add a shirt' or 'search for products'."
+        
+        # Calculate cart summary
+        total_items = sum(item['quantity'] for item in st.session_state.cart_items)
+        total_value = sum(item['price'] * item['quantity'] for item in st.session_state.cart_items)
+        
+        # Create order summary
+        order_summary = []
+        for item in st.session_state.cart_items:
+            item_total = item['price'] * item['quantity']
+            order_summary.append(f"• {item['quantity']}x {item['name']} - ${item_total:.2f}")
+        
+        summary_text = "\n".join(order_summary)
+        
+        # Process the checkout (simulate order placement)
+        order_id = f"ORD-{int(time.time())}"
+        
+        # Clear the cart after successful checkout
+        st.session_state.cart_items.clear()
+        
+        # Track the order in session state for reference
+        if 'completed_orders' not in st.session_state:
+            st.session_state.completed_orders = []
+        
+        st.session_state.completed_orders.append({
+            'order_id': order_id,
+            'total_items': total_items,
+            'total_value': total_value,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        return f"""🎉 **Order Placed Successfully!**
+
+**Order ID:** {order_id}
+**Items Ordered ({total_items} items):**
+{summary_text}
+
+**Total: ${total_value:.2f}**
+
+Your order has been confirmed and your cart has been cleared. Thank you for shopping with us! 
+
+You can continue shopping by asking me to add more items or search for products."""
     
     def show_testing_page(self):
         """Display the testing tools page"""
@@ -956,6 +1149,130 @@ Just tell me what you want and I'll help you find it! 🛍️"""
                         
                     except Exception as e:
                         st.error(f"Scenario execution failed: {str(e)}")
+        
+        # Evaluation Metrics Section
+        st.markdown("### 📈 Evaluation Metrics")
+        
+        # Disclaimer about simulated data
+        st.info("📊 **Note**: The metrics and visualizations below use simulated data for demonstration purposes. In a production system, these would be calculated from real test results and user interactions.")
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown("""
+            **Evaluation metrics help assess the performance of the voice shopping assistant:**
+            - **Precision**: Accuracy of positive predictions (fewer false positives)
+            - **Recall**: Ability to find all relevant instances (fewer false negatives)  
+            - **F1-Score**: Harmonic mean of precision and recall
+            - **Intent Accuracy**: Percentage of correctly classified user intents
+            """)
+        
+        with col2:
+            if st.button("🔄 Refresh Metrics"):
+                st.session_state.evaluation_metrics = self._generate_evaluation_metrics()
+                st.rerun()
+        
+        # Generate or use cached evaluation metrics
+        if 'evaluation_metrics' not in st.session_state:
+            st.session_state.evaluation_metrics = self._generate_evaluation_metrics()
+        
+        metrics = st.session_state.evaluation_metrics
+        
+        # Key metrics display
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            precision = metrics['precision']
+            st.metric("Precision", f"{precision:.3f}", 
+                     delta=f"{precision - 0.85:.3f}" if precision >= 0.85 else f"{precision - 0.85:.3f}")
+        
+        with col2:
+            recall = metrics['recall']
+            st.metric("Recall", f"{recall:.3f}", 
+                     delta=f"{recall - 0.80:.3f}" if recall >= 0.80 else f"{recall - 0.80:.3f}")
+        
+        with col3:
+            f1_score = metrics['f1_score']
+            st.metric("F1-Score", f"{f1_score:.3f}", 
+                     delta=f"{f1_score - 0.82:.3f}" if f1_score >= 0.82 else f"{f1_score - 0.82:.3f}")
+        
+        with col4:
+            intent_accuracy = metrics['intent_accuracy']
+            st.metric("Intent Accuracy", f"{intent_accuracy:.3f}", 
+                     delta=f"{intent_accuracy - 0.90:.3f}" if intent_accuracy >= 0.90 else f"{intent_accuracy - 0.90:.3f}")
+        
+        # Visualizations
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Precision-Recall curve
+            fig_pr = px.line(
+                x=metrics['precision_recall_curve']['recall'],
+                y=metrics['precision_recall_curve']['precision'],
+                title="Precision-Recall Curve",
+                labels={'x': 'Recall', 'y': 'Precision'}
+            )
+            fig_pr.add_hline(y=0.8, line_dash="dash", line_color="red", 
+                           annotation_text="Target Precision (0.8)")
+            fig_pr.add_vline(x=0.8, line_dash="dash", line_color="red", 
+                           annotation_text="Target Recall (0.8)")
+            st.plotly_chart(fig_pr, use_container_width=True)
+        
+        with col2:
+            # Intent classification accuracy by category
+            intent_data = metrics['intent_by_category']
+            fig_intent = px.bar(
+                x=list(intent_data.keys()),
+                y=list(intent_data.values()),
+                title="Intent Accuracy by Category",
+                labels={'x': 'Intent Category', 'y': 'Accuracy'}
+            )
+            fig_intent.add_hline(y=0.9, line_dash="dash", line_color="green", 
+                               annotation_text="Target Accuracy (0.9)")
+            st.plotly_chart(fig_intent, use_container_width=True)
+        
+        # Confusion Matrix
+        st.markdown("#### 🎯 Intent Classification Confusion Matrix")
+        confusion_matrix = metrics['confusion_matrix']
+        
+        fig_cm = px.imshow(
+            confusion_matrix['matrix'],
+            x=confusion_matrix['labels'],
+            y=confusion_matrix['labels'],
+            color_continuous_scale='Blues',
+            title="Intent Classification Confusion Matrix"
+        )
+        fig_cm.update_layout(
+            xaxis_title="Predicted Intent",
+            yaxis_title="True Intent"
+        )
+        st.plotly_chart(fig_cm, use_container_width=True)
+        
+        # Performance over time
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Accuracy trend
+            accuracy_trend = metrics['accuracy_trend']
+            fig_trend = px.line(
+                x=accuracy_trend['timestamps'],
+                y=accuracy_trend['accuracy'],
+                title="Intent Accuracy Since Project Start (Nov 1, 2024)",
+                labels={'x': 'Date', 'y': 'Accuracy'}
+            )
+            st.plotly_chart(fig_trend, use_container_width=True)
+        
+        with col2:
+            # Response time distribution
+            response_times = metrics['response_times']
+            fig_rt = px.histogram(
+                x=response_times,
+                nbins=20,
+                title="Response Time Distribution",
+                labels={'x': 'Response Time (ms)', 'y': 'Frequency'}
+            )
+            fig_rt.add_vline(x=500, line_dash="dash", line_color="red", 
+                           annotation_text="Target Response Time (500ms)")
+            st.plotly_chart(fig_rt, use_container_width=True)
         
         # Test results display
         if st.session_state.test_results:
@@ -1014,6 +1331,107 @@ Just tell me what you want and I'll help you find it! 🛍️"""
             st.write(f"- Cart Items: {len(st.session_state.cart_items)}")
             st.write(f"- Conversation History: {len(st.session_state.conversation_history)}")
     
+    def _generate_evaluation_metrics(self):
+        """Generate evaluation metrics for testing visualization"""
+        import numpy as np
+        from datetime import datetime, timedelta
+        
+        # Simulate realistic evaluation metrics
+        np.random.seed(42)  # For consistent results
+        
+        # Core metrics
+        precision = 0.87 + np.random.normal(0, 0.05)
+        recall = 0.83 + np.random.normal(0, 0.04)
+        f1_score = 2 * (precision * recall) / (precision + recall)
+        intent_accuracy = 0.91 + np.random.normal(0, 0.03)
+        
+        # Ensure metrics are in valid range
+        precision = max(0, min(1, precision))
+        recall = max(0, min(1, recall))
+        f1_score = max(0, min(1, f1_score))
+        intent_accuracy = max(0, min(1, intent_accuracy))
+        
+        # Precision-Recall curve data
+        recall_points = np.linspace(0, 1, 20)
+        precision_points = []
+        for r in recall_points:
+            # Simulate realistic PR curve (precision decreases as recall increases)
+            p = 0.95 - 0.3 * r + np.random.normal(0, 0.02)
+            precision_points.append(max(0.1, min(1, p)))
+        
+        # Intent accuracy by category
+        intent_categories = ['add_item', 'remove_item', 'search_product', 'show_cart', 'help', 'clear_cart']
+        intent_accuracies = {}
+        for category in intent_categories:
+            base_accuracy = 0.88 if category in ['add_item', 'search_product'] else 0.92
+            accuracy = base_accuracy + np.random.normal(0, 0.04)
+            intent_accuracies[category] = max(0.7, min(1, accuracy))
+        
+        # Confusion matrix (simplified 6x6 for main intents)
+        matrix_size = len(intent_categories)
+        confusion_matrix = np.zeros((matrix_size, matrix_size))
+        
+        # Fill diagonal with high values (correct predictions)
+        for i in range(matrix_size):
+            confusion_matrix[i, i] = np.random.randint(80, 95)
+        
+        # Add some confusion between similar intents
+        confusion_matrix[0, 2] = np.random.randint(3, 8)  # add_item confused with search
+        confusion_matrix[2, 0] = np.random.randint(2, 6)  # search confused with add
+        confusion_matrix[1, 5] = np.random.randint(1, 4)  # remove confused with clear
+        
+        # Fill remaining with small random values
+        for i in range(matrix_size):
+            for j in range(matrix_size):
+                if i != j and confusion_matrix[i, j] == 0:
+                    confusion_matrix[i, j] = np.random.randint(0, 3)
+        
+        # Normalize rows to percentages
+        row_sums = confusion_matrix.sum(axis=1, keepdims=True)
+        confusion_matrix = confusion_matrix / row_sums * 100
+        
+        # Accuracy trend over time (since project start: Nov 1, 2024)
+        timestamps = []
+        accuracies = []
+        project_start = datetime(2024, 11, 1)  # Project started Nov 1, 2024
+        days_since_start = (datetime.now() - project_start).days
+        
+        # Show data from project start to now (max 30 days for readability)
+        days_to_show = min(days_since_start + 1, 30)
+        
+        for i in range(days_to_show):
+            date = project_start + timedelta(days=i)
+            timestamps.append(date.strftime('%Y-%m-%d'))
+            # Simulate improving accuracy over time with some noise
+            trend_accuracy = 0.85 + (i / days_to_show) * 0.08 + np.random.normal(0, 0.02)
+            accuracies.append(max(0.7, min(1, trend_accuracy)))
+        
+        # Response times (in milliseconds)
+        response_times = np.random.lognormal(mean=5.5, sigma=0.5, size=1000)  # Log-normal distribution
+        response_times = response_times * 100  # Scale to milliseconds
+        response_times = response_times[response_times < 2000]  # Cap at 2 seconds
+        
+        return {
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1_score,
+            'intent_accuracy': intent_accuracy,
+            'precision_recall_curve': {
+                'precision': precision_points,
+                'recall': recall_points.tolist()
+            },
+            'intent_by_category': intent_accuracies,
+            'confusion_matrix': {
+                'matrix': confusion_matrix.tolist(),
+                'labels': intent_categories
+            },
+            'accuracy_trend': {
+                'timestamps': timestamps,
+                'accuracy': accuracies
+            },
+            'response_times': response_times.tolist()
+        }
+    
     def show_analytics_page(self):
         """Display analytics and insights page"""
         st.markdown("## 📊 Analytics & Insights")
@@ -1041,8 +1459,10 @@ Just tell me what you want and I'll help you find it! 🛍️"""
             # Price distribution
             prices = [p.price for p in products]
             fig = px.histogram(x=prices, nbins=20, title="Price Distribution")
-            fig.update_xaxis(title="Price ($)")
-            fig.update_yaxis(title="Number of Products")
+            fig.update_layout(
+                xaxis_title="Price ($)",
+                yaxis_title="Number of Products"
+            )
             st.plotly_chart(fig, width="stretch")
         
         # Brand analysis
@@ -1113,18 +1533,19 @@ Just tell me what you want and I'll help you find it! 🛍️"""
                     st.info("No conversation history")
     
     def _add_integrated_voice_input(self):
-        """Add integrated voice input with microphone icon in the chat field"""
+        """Add integrated voice input with microphone icon and send button"""
         
         # Add the integrated voice input component
         voice_component = """
         <div style="margin-bottom: 1rem;">
             <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-                <button id="voiceMicButton" onclick="toggleVoiceRecognition()" 
+                <button id="voiceMicButton" onclick="startVoiceRecognition()"
                         style="background-color: #1f77b4; color: white; border: none; padding: 0.4rem 0.8rem; 
                                border-radius: 20px; cursor: pointer; font-size: 16px; display: flex; align-items: center; gap: 0.3rem;">
                     <span id="micIcon">🎤</span>
                     <span id="micText">Speak</span>
                 </button>
+
                 <span id="voiceStatus" style="font-size: 14px; color: #666;">Click microphone to speak</span>
             </div>
             <div id="voiceTranscript" style="display: none; padding: 0.5rem; background-color: #f0f8ff; 
@@ -1134,8 +1555,10 @@ Just tell me what you want and I'll help you find it! 🛍️"""
         </div>
 
         <script>
+        // Simple, direct approach - no complex global variables
         let recognition = null;
         let isListening = false;
+        let currentTranscript = '';
 
         // Check if browser supports speech recognition
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
@@ -1147,9 +1570,13 @@ Just tell me what you want and I'll help you find it! 🛍️"""
             recognition.interimResults = true;
             recognition.lang = 'en-US';
             
+            console.log('✅ Speech recognition initialized');
+            
             // Event handlers
             recognition.onstart = function() {
                 isListening = true;
+                console.log('🎤 Voice recognition started');
+                
                 document.getElementById('micIcon').textContent = '🔴';
                 document.getElementById('micText').textContent = 'Listening...';
                 document.getElementById('voiceMicButton').style.backgroundColor = '#dc3545';
@@ -1170,25 +1597,142 @@ Just tell me what you want and I'll help you find it! 🛍️"""
                     }
                 }
                 
+                console.log('Voice result:', transcript, 'Final:', isFinal);
+                
                 // Update the transcript display
                 document.getElementById('transcriptText').textContent = transcript;
                 
-                // If final result, update the Streamlit text input
+                // Store the current transcript
+                currentTranscript = transcript.trim();
+                
+                // If final result, try to update the text input
                 if (isFinal && transcript.trim()) {
-                    // Find the Streamlit chat input field
-                    const chatInput = document.querySelector('input[placeholder*="shopping request"]');
-                    if (chatInput) {
-                        chatInput.value = transcript.trim();
-                        chatInput.dispatchEvent(new Event('input', { bubbles: true }));
-                        chatInput.dispatchEvent(new Event('change', { bubbles: true }));
+                    console.log('🎯 Attempting to set input field with:', transcript.trim());
+                    
+                    // Still try to update the text input as fallback
+                    function findAndSetInput(transcript, retryCount = 0) {
+                        console.log(`🔍 Attempt ${retryCount + 1} to find input field`);
+                        let targetInput = null;
                         
-                        // Focus on the input so user can see the text and press Enter
-                        chatInput.focus();
+                        // Method 1: Try to find by ID (most reliable)
+                        targetInput = document.getElementById('text_input_1');
+                        if (targetInput) {
+                            console.log('✅ Found input by ID: text_input_1');
+                        }
                         
-                        // Update status
-                        document.getElementById('voiceStatus').textContent = '✅ Voice transcribed! Press Enter to send.';
-                        document.getElementById('voiceStatus').style.color = '#1f77b4';
+                        // Method 2: Try to find by aria-label
+                        if (!targetInput) {
+                            targetInput = document.querySelector('input[aria-label*="Type your shopping request"]');
+                            if (targetInput) {
+                                console.log('✅ Found input by aria-label');
+                            }
+                        }
+                        
+                        // Method 3: Try to find by placeholder content
+                        if (!targetInput) {
+                            targetInput = document.querySelector('input[placeholder*="Add two red shirts"]');
+                            if (targetInput) {
+                                console.log('✅ Found input by placeholder');
+                            }
+                        }
+                        
+                        // Method 4: Comprehensive search including disabled inputs
+                        if (!targetInput) {
+                            console.log('🔍 Comprehensive search starting...');
+                            
+                            // Try all input elements (including disabled ones)
+                            const allInputs = document.querySelectorAll('input');
+                            console.log('All inputs found:', allInputs.length);
+                            
+                            const textInputs = document.querySelectorAll('input[type="text"]');
+                            console.log('Text inputs found:', textInputs.length);
+                            
+                            // Debug: Check all inputs
+                            allInputs.forEach((input, index) => {
+                                console.log(`Input ${index}:`, {
+                                    type: input.type,
+                                    id: input.id,
+                                    placeholder: input.placeholder?.substring(0, 30),
+                                    'aria-label': input.getAttribute('aria-label')?.substring(0, 30),
+                                    disabled: input.disabled,
+                                    className: input.className?.substring(0, 50)
+                                });
+                                
+                                // Check if this matches our target input
+                                if (input.id === 'text_input_1' || 
+                                    (input.getAttribute('aria-label') && input.getAttribute('aria-label').includes('Type your shopping request')) ||
+                                    (input.placeholder && input.placeholder.includes('Add two red shirts'))) {
+                                    targetInput = input;
+                                    console.log('✅ Found target input in comprehensive search!');
+                                }
+                            });
+                            
+                            // If still not found, try the largest visible input
+                            if (!targetInput && textInputs.length > 0) {
+                                for (let input of textInputs) {
+                                    const rect = input.getBoundingClientRect();
+                                    if (rect.width > 200) {
+                                        targetInput = input;
+                                        console.log('✅ Found input by size fallback');
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (targetInput) {
+                            console.log('✅ Found target input:', {
+                                id: targetInput.id,
+                                placeholder: targetInput.placeholder?.substring(0, 50),
+                                disabled: targetInput.disabled
+                            });
+                            
+                            // Check if input is disabled and try to enable it
+                            if (targetInput.disabled) {
+                                console.log('⚠️ Input is disabled, trying to enable...');
+                                targetInput.disabled = false;
+                            }
+                            
+                            // Set the value using multiple approaches for Streamlit compatibility
+                            try {
+                                // Method 1: Direct value setting
+                                targetInput.value = transcript.trim();
+                                
+                                // Method 2: React-compatible value setting
+                                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                nativeInputValueSetter.call(targetInput, transcript.trim());
+                                
+                                // Method 3: Dispatch events to notify Streamlit
+                                targetInput.dispatchEvent(new Event('input', { bubbles: true }));
+                                targetInput.dispatchEvent(new Event('change', { bubbles: true }));
+                                
+                                // Focus the input
+                                targetInput.focus();
+                                
+                                console.log('✅ Successfully set input value:', transcript.trim());
+                                document.getElementById('voiceStatus').textContent = '✅ Voice transcribed! Press Enter to send.';
+                                document.getElementById('voiceStatus').style.color = '#1f77b4';
+                                
+                            } catch (error) {
+                                console.error('❌ Error setting input value:', error);
+                                document.getElementById('voiceStatus').textContent = '⚠️ Transcribed but failed to set input. Copy: ' + transcript.trim();
+                                document.getElementById('voiceStatus').style.color = '#ff8c00';
+                            }
+                        } else {
+                            console.log('❌ No suitable input field found');
+                            if (retryCount < 3) {
+                                console.log(`⏳ Input not found, retrying in 500ms... (attempt ${retryCount + 1}/3)`);
+                                setTimeout(() => findAndSetInput(transcript, retryCount + 1), 500);
+                            } else {
+                                console.log('❌ Input field not found after 3 attempts');
+                                document.getElementById('voiceStatus').textContent = '❌ Input field not found. Copy text: ' + transcript.trim();
+                                document.getElementById('voiceStatus').style.color = '#dc3545';
+                            }
+                        }
                     }
+                    
+                    // Start the search
+                    findAndSetInput(transcript.trim());
                 }
             };
             
@@ -1199,8 +1743,6 @@ Just tell me what you want and I'll help you find it! 🛍️"""
                     errorMsg = 'Microphone access denied. Please allow microphone access.';
                 } else if (event.error === 'no-speech') {
                     errorMsg = 'No speech detected. Please try again.';
-                } else if (event.error === 'network') {
-                    errorMsg = 'Network error. Please check your connection.';
                 }
                 
                 document.getElementById('voiceStatus').textContent = '❌ ' + errorMsg;
@@ -1209,17 +1751,9 @@ Just tell me what you want and I'll help you find it! 🛍️"""
             };
             
             recognition.onend = function() {
+                console.log('🎤 Voice recognition ended');
                 isListening = false;
                 resetMicButton();
-                
-                // If we have transcript text, keep the success message
-                const transcriptText = document.getElementById('transcriptText').textContent;
-                if (transcriptText && transcriptText !== 'Listening...' && !document.getElementById('voiceStatus').textContent.includes('Error')) {
-                    // Keep the success message
-                } else if (!document.getElementById('voiceStatus').textContent.includes('Error')) {
-                    document.getElementById('voiceStatus').textContent = 'Click microphone to speak';
-                    document.getElementById('voiceStatus').style.color = '#666';
-                }
             };
             
         } else {
@@ -1228,19 +1762,36 @@ Just tell me what you want and I'll help you find it! 🛍️"""
             document.getElementById('voiceMicButton').style.backgroundColor = '#ccc';
             document.getElementById('voiceStatus').textContent = '❌ Speech recognition not supported in this browser';
             document.getElementById('voiceStatus').style.color = '#dc3545';
+            console.log('❌ Speech recognition not supported');
         }
 
-        function toggleVoiceRecognition() {
-            if (!recognition) return;
+        function startVoiceRecognition() {
+            console.log('🎤 Button clicked! Recognition available:', !!recognition, 'Currently listening:', isListening);
+            
+            if (!recognition) {
+                document.getElementById('voiceStatus').textContent = '❌ Speech recognition not available';
+                document.getElementById('voiceStatus').style.color = '#dc3545';
+                return;
+            }
             
             if (isListening) {
+                console.log('⏹️ Stopping recognition');
                 recognition.stop();
             } else {
-                // Clear previous transcript
-                document.getElementById('transcriptText').textContent = '';
-                recognition.start();
+                console.log('▶️ Starting recognition');
+                try {
+                    // Clear previous transcript
+                    document.getElementById('transcriptText').textContent = '';
+                    recognition.start();
+                } catch (error) {
+                    console.error('Error starting recognition:', error);
+                    document.getElementById('voiceStatus').textContent = '❌ Error: ' + error.message;
+                    document.getElementById('voiceStatus').style.color = '#dc3545';
+                }
             }
         }
+
+
 
         function resetMicButton() {
             document.getElementById('micIcon').textContent = '🎤';
